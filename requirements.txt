@@ -1,0 +1,8 @@
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+fast-mcp>=0.2.0
+# Assuming fast-mcp is available on PyPI with this version or similar
+# If it's a local/git dependency, the line would be different, e.g.:
+# git+https://github.com/yourusername/fast-mcp.git@main
+# or for a local library:
+# -e ./path/to/fast-mcp-package
