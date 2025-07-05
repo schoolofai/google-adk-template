@@ -1,29 +1,58 @@
 class Agent:
     def __init__(self):
-        self.mcp_clients = {}
+        self.mcp_clients = {} # These are the "tools" the agent can use
 
-    def register_mcp_client(self, mcp_name, client):
-        self.mcp_clients[mcp_name] = client
+    def register_mcp_client(self, tool_name, client):
+        """Registers an MCP client as a tool for the agent."""
+        self.mcp_clients[tool_name] = client
 
-    async def process_request(self, request_data):
+    async def process_instruction(self, instruction: str, data: dict | None = None):
         """
-        Simple reasoning: if the request_data contains a key 'use_mcp',
-        it will try to use the MCP specified by that key.
-        Otherwise, it returns a default response.
+        Processes a given instruction, potentially using tools (MCPs).
+        This is a simplified reasoning process. A more advanced ADK-aligned agent
+        might involve more sophisticated NLP for instruction parsing, intent recognition,
+        and slot filling.
+
+        :param instruction: A textual instruction or goal for the agent.
+        :param data: Additional data accompanying the instruction.
         """
-        if "use_mcp" in request_data and request_data["use_mcp"] in self.mcp_clients:
-            mcp_name = request_data["use_mcp"]
-            client = self.mcp_clients[mcp_name]
+        if data is None:
+            data = {}
+
+        # Simple keyword-based routing to tools.
+        # In a more complex ADK, this would be an NLU/intent matching step.
+        if "use simple_mcp" in instruction.lower() and "simple_mcp" in self.mcp_clients:
+            tool_name = "simple_mcp"
+            client = self.mcp_clients[tool_name]
             try:
-                # Assuming the MCP client has a 'call' method
-                # and the MCP expects 'data' in the request
-                mcp_request_payload = {"data": request_data.get("data", {})}
-                response = await client.call(method_name="process", data=mcp_request_payload) # Changed: Pass data directly
-                return {"agent_response": f"Data processed by {mcp_name}", "mcp_response": response}
+                # The 'data' for the MCP call should be what the MCP expects.
+                # We assume the top-level 'data' field in the agent request is meant for the MCP.
+                mcp_payload = {"data": data.get("mcp_data", data)} # Allow nesting or pass directly
+                response = await client.call(method_name="process", data=mcp_payload)
+                return {
+                    "agent_action": f"Used tool '{tool_name}' based on instruction.",
+                    "tool_response": response,
+                    "status": "success"
+                }
             except Exception as e:
-                return {"error": f"Failed to call MCP {mcp_name}: {str(e)}"}
+                return {
+                    "agent_action": f"Attempted to use tool '{tool_name}' but failed.",
+                    "error_message": str(e),
+                    "status": "error"
+                }
+        elif "local task" in instruction.lower():
+            # Example of the agent handling a task directly
+            return {
+                "agent_action": "Handled instruction locally.",
+                "result": {"message": "Local task executed successfully.", "received_data": data},
+                "status": "success"
+            }
         else:
-            return {"agent_response": "No specific MCP requested or MCP not found, processed by agent."}
+            return {
+                "agent_action": "No specific tool or local task identified for instruction.",
+                "instruction_received": instruction,
+                "status": "unclear_instruction"
+            }
 
-# Global agent instance (can be managed by a dependency injection system in a real app)
+# Global agent instance
 agent_instance = Agent()

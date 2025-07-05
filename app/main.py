@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Any
 
@@ -10,68 +10,80 @@ from fast_mcp.hub import MCPHub
 from fast_mcp.service_config import MCPServiceConfig
 
 # Initialize FastAPI app
-app = FastAPI(title="Multi-MCP Agent Service")
+app = FastAPI(title="Google ADK-aligned Multi-MCP Agent Service")
 
 # --- MCP Hub Setup ---
-# Define the base URL for MCP services from environment or default
-# In a real deployment, this would come from configuration
-MCP_BASE_URL = "http://localhost:8000/mcp" # This service's own MCP endpoint
-
+MCP_BASE_URL = "http://localhost:8000/mcp"
 mcp_hub = MCPHub()
 
-# Register SimpleMCP
 simple_mcp_service_name = "simple_mcp"
 simple_mcp_router = get_simple_mcp_router()
 mcp_hub.register_service(
     MCPServiceConfig(
         name=simple_mcp_service_name,
         router=simple_mcp_router,
-        # No client needed here as this is the service being exposed
     )
 )
-
-# Include the MCP Hub router
-# All registered MCP services will be available under /mcp/{service_name}
 app.include_router(mcp_hub.router, prefix="/mcp")
 
-# --- Agent Setup ---
-# Instantiate and register the adaptor for SimpleMCP with the agent
-# The agent will use this client adaptor to *call* the SimpleMCP.
-# Even though SimpleMCP is hosted in this same application, the agent interacts with it
-# via the MCP standard, so it needs a client configured to its own /mcp/simple_mcp endpoint.
+# --- Agent Setup (ADK-aligned) ---
+# Registering the SimpleMCPAdaptor as a "tool" for the agent.
+# The agent will use this client adaptor to *call* the SimpleMCP tool.
 simple_mcp_client_adaptor = SimpleMCPAdaptor(base_url=MCP_BASE_URL, service_name=simple_mcp_service_name)
-agent_instance.register_mcp_client(simple_mcp_service_name, simple_mcp_client_adaptor)
+agent_instance.register_mcp_client(tool_name=simple_mcp_service_name, client=simple_mcp_client_adaptor)
 
 
-# --- API Endpoints ---
-class AgentRequest(BaseModel):
-    use_mcp: str | None = None # Name of the MCP to use
-    data: dict | None = {}       # Data to be processed by agent or passed to MCP
+# --- API Endpoints (ADK-aligned) ---
+class AgentInstructionRequest(BaseModel):
+    instruction: str  # Primary instruction for the agent (natural language or command)
+    data: dict | None = {}  # Supporting data for the instruction or for the tool
 
-class AgentResponse(BaseModel):
-    agent_response: str | dict
-    mcp_response: Any | None = None
-    error: str | None = None
+class AgentInstructionResponse(BaseModel):
+    agent_action: str
+    tool_response: Any | None = None
+    result: Any | None = None
+    status: str # e.g., "success", "error", "unclear_instruction"
+    error_message: str | None = None
+    instruction_received: str | None = None
 
-@app.post("/agent/process", response_model=AgentResponse)
-async def process_agent_request(request: AgentRequest):
+
+@app.post("/agent/execute", response_model=AgentInstructionResponse)
+async def execute_agent_instruction(request: AgentInstructionRequest):
     """
-    Endpoint for the agent to process requests.
-    The agent might decide to use one of its registered MCPs.
+    Endpoint for the agent to execute tasks based on instructions.
+    The agent processes the instruction and may use registered tools (MCPs).
     """
     try:
-        result = await agent_instance.process_request(request.model_dump()) # Use model_dump() for Pydantic v2
-        return AgentResponse(**result)
+        # Pass instruction and data to the agent's processing method
+        result = await agent_instance.process_instruction(
+            instruction=request.instruction,
+            data=request.data
+        )
+        # Ensure all fields in AgentInstructionResponse are covered by the result dict
+        # or provide defaults.
+        response_data = {
+            "agent_action": result.get("agent_action", "No action specified"),
+            "tool_response": result.get("tool_response"),
+            "result": result.get("result"),
+            "status": result.get("status", "unknown"),
+            "error_message": result.get("error_message"),
+            "instruction_received": result.get("instruction_received", request.instruction if result.get("status") == "unclear_instruction" else None)
+        }
+        return AgentInstructionResponse(**response_data)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # This is a fallback for unexpected errors in the endpoint/agent interaction logic
+        # Errors from tools should ideally be caught and structured by the agent itself.
+        return AgentInstructionResponse(
+            agent_action="Failed to process instruction due to unexpected error.",
+            status="error",
+            error_message=str(e)
+        )
 
 @app.get("/")
 async def read_root():
-    return {"message": "Welcome to the Multi-MCP Agent Service. Visit /docs for API documentation."}
+    return {"message": "Welcome to the Google ADK-aligned Multi-MCP Agent Service. Visit /docs for API."}
 
 # --- Main block for running with Uvicorn (for development) ---
 if __name__ == "__main__":
     import uvicorn
-    # It's important that the reload flag is False or that you use a production ASGI server
-    # if you have background tasks or state that should not be re-initialized on every reload.
     uvicorn.run(app, host="0.0.0.0", port=8000)
